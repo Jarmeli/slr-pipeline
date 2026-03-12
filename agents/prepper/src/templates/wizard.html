@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SLR Pipeline — Setup Wizard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .card {
+      background: rgba(255,255,255,0.05);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 560px;
+    }
+    .logo { font-size: 2rem; margin-bottom: 0.25rem; }
+    h1 { font-size: 1.5rem; font-weight: 700; color: #38bdf8; }
+    p.subtitle { font-size: 0.875rem; color: #94a3b8; margin-bottom: 2rem; }
+    .section-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      margin: 1.5rem 0 0.75rem;
+    }
+    .field { margin-bottom: 1rem; }
+    label { display: block; font-size: 0.85rem; color: #cbd5e1; margin-bottom: 0.3rem; }
+    input, select {
+      width: 100%;
+      padding: 0.55rem 0.75rem;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: #38bdf8; }
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 0.75rem; }
+    .btn {
+      width: 100%;
+      margin-top: 1.75rem;
+      padding: 0.75rem;
+      background: linear-gradient(135deg, #0ea5e9, #6366f1);
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status {
+      margin-top: 1.25rem;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      display: none;
+    }
+    #status.success { background: rgba(16,185,129,0.15); border: 1px solid #10b981; color: #6ee7b7; }
+    #status.error   { background: rgba(239,68,68,0.15);  border: 1px solid #ef4444; color: #fca5a5; }
+    .agent-links { margin-top: 0.75rem; }
+    .agent-links a {
+      display: inline-block;
+      margin: 0.25rem 0.5rem 0 0;
+      padding: 0.3rem 0.65rem;
+      background: rgba(56,189,248,0.12);
+      border: 1px solid #38bdf8;
+      border-radius: 6px;
+      color: #38bdf8;
+      text-decoration: none;
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🌊</div>
+    <h1>SLR Pipeline Setup</h1>
+    <p class="subtitle">Configure your PostgreSQL database and LM Studio connection to launch all agents.</p>
+
+    <form id="setupForm" method="POST" action="/setup">
+      <div class="section-title">PostgreSQL (Azure)</div>
+      <div class="row">
+        <div class="field">
+          <label for="pghost">Host</label>
+          <input id="pghost" name="pghost" type="text" placeholder="server.postgres.database.azure.com" required />
+        </div>
+        <div class="field">
+          <label for="pgport">Port</label>
+          <input id="pgport" name="pgport" type="number" value="5432" required />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="pguser">User</label>
+          <input id="pguser" name="pguser" type="text" placeholder="admin_user" required />
+        </div>
+        <div class="field">
+          <label for="pgdatabase">Database</label>
+          <input id="pgdatabase" name="pgdatabase" type="text" placeholder="slr_db" required />
+        </div>
+      </div>
+      <div class="field">
+        <label for="pgpassword">Password</label>
+        <input id="pgpassword" name="pgpassword" type="password" required />
+      </div>
+      <div class="field">
+        <label for="pgssl">SSL Mode</label>
+        <select id="pgssl" name="pgssl">
+          <option value="true" selected>Enabled (Azure default)</option>
+          <option value="false">Disabled (local dev)</option>
+        </select>
+      </div>
+
+      <div class="section-title">LM Studio</div>
+      <div class="field">
+        <label for="lm_studio_url">API Base URL</label>
+        <input id="lm_studio_url" name="lm_studio_url" type="text"
+               value="http://host.docker.internal:1234/v1" required />
+      </div>
+      <div class="field">
+        <label for="lm_studio_model">Model Name</label>
+        <input id="lm_studio_model" name="lm_studio_model" type="text"
+               value="local-model" placeholder="as shown in LM Studio" required />
+      </div>
+
+      <div class="section-title">Data</div>
+      <div class="field">
+        <label for="data_dir">Data Directory (host path for CSV inputs)</label>
+        <input id="data_dir" name="data_dir" type="text" value="/data" required />
+      </div>
+
+      <button type="submit" class="btn" id="submitBtn">🚀 Launch Pipeline</button>
+    </form>
+
+    <div id="status"></div>
+  </div>
+
+  <script>
+    document.getElementById('setupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('submitBtn');
+      const statusEl = document.getElementById('status');
+      btn.disabled = true;
+      btn.textContent = '⏳ Launching…';
+
+      const formData = new FormData(e.target);
+      try {
+        const res = await fetch('/setup', { method: 'POST', body: formData });
+        const data = await res.json();
+        statusEl.style.display = 'block';
+        if (res.ok) {
+          statusEl.className = 'success';
+          let html = `✅ ${data.message}<div class="agent-links">`;
+          for (const [name, url] of Object.entries(data.agents || {})) {
+            html += `<a href="${url}" target="_blank">${name}</a>`;
+          }
+          html += '</div>';
+          statusEl.innerHTML = html;
+        } else {
+          statusEl.className = 'error';
+          statusEl.textContent = `❌ ${data.message}`;
+          btn.disabled = false;
+          btn.textContent = '🚀 Launch Pipeline';
+        }
+      } catch (err) {
+        statusEl.style.display = 'block';
+        statusEl.className = 'error';
+        statusEl.textContent = `❌ Network error: ${err.message}`;
+        btn.disabled = false;
+        btn.textContent = '🚀 Launch Pipeline';
+      }
+    });
+  </script>
+</body>
+</html>

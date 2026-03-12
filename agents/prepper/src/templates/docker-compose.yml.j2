@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  prepper:
+    build: ./agents/prepper
+    ports:
+      - "7000:7000"
+    volumes:
+      - "./.env:/app/.env:rw"
+      - "./docker-compose.yml:/app/docker-compose.yml:rw"
+    restart: "no"
+
+  dio:
+    build: ./agents/dio
+    ports:
+      - "7001:7001"
+    env_file: .env
+    environment:
+      - DIO_PORT=7001
+    restart: unless-stopped
+
+  mel:
+    build: ./agents/mel
+    ports:
+      - "7002:7002"
+    env_file: .env
+    environment:
+      - MEL_PORT=7002
+    volumes:
+      - artifacts:/artifacts
+      - {{ data_dir }}:/data:ro
+    restart: unless-stopped
+
+  simo:
+    build: ./agents/simo
+    ports:
+      - "7003:7003"
+    env_file: .env
+    environment:
+      - SIMO_PORT=7003
+      - CHROMA_PERSIST_DIR=/artifacts/chroma
+    volumes:
+      - artifacts:/artifacts:ro
+      - chroma_data:/artifacts/chroma
+    restart: unless-stopped
+
+volumes:
+  artifacts:
+  chroma_data:
