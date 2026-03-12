@@ -5,12 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY agents/simo/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../shared /app/shared
-
-COPY src/ ./src/
+COPY shared/ ./shared/
+COPY agents/simo/src/ ./src/
 
 EXPOSE 7003
 

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 # Allow importing shared/ when running inside container
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -113,14 +113,13 @@ async def clean_claims(
     - Write result to clean_data.claims_processed
     """
     import pandas as pd
-    import io
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM public.collier_claims_cleaned LIMIT 100000")
+        rows = await conn.fetch("SELECT * FROM public.collier_claims LIMIT 100000")
 
     if not rows:
-        return {"status": "error", "message": "collier_claims_cleaned not found or empty"}
+        return {"status": "error", "message": "collier_claims not found or empty"}
 
     df = pd.DataFrame([dict(r) for r in rows])
     key_cols = ["buildingdamageamount", "buildingpropertyvalue", "waterdepth",

@@ -21,7 +21,10 @@ import sys
 from typing import Any, Dict, List, Optional
 
 import httpx
+from dotenv import load_dotenv
 from openai import OpenAI
+
+load_dotenv()  # read .env so LM_STUDIO_URL / PGHOST etc. are available
 
 # ── Agent base URLs ───────────────────────────────────────────────────────────
 
@@ -201,7 +204,10 @@ async def _run_direct(flood_levels: List[float], clean: bool) -> None:
     """Direct sequential pipeline without LLM orchestration."""
     print("\n▶ Step 1: DIO — Clean claims")
     r = await dispatch_tool("clean_claims", {"missing_strategy": "drop", "depth_unit": "inches"})
-    print(f"  {r.get('status', r)}")
+    if "error" in r:
+        print(f"  ERROR: {r['error']}")
+        return
+    print(f"  status={r.get('status')}  rows={r.get('rows_written')}")
 
     print("\n▶ Step 2: DIO — Export HandoffToken")
     handoff = await dispatch_tool("export_handoff", {})
@@ -214,7 +220,11 @@ async def _run_direct(flood_levels: List[float], clean: bool) -> None:
 
     print("\n▶ Step 4: MEL — Fit GMM")
     r = await dispatch_tool("fit_gmm", {"n_components": 3})
-    print(f"  AIC={r.get('aic', '?'):.1f}  BIC={r.get('bic', '?'):.1f}")
+    aic, bic = r.get('aic'), r.get('bic')
+    if isinstance(aic, (int, float)) and isinstance(bic, (int, float)):
+        print(f"  AIC={aic:.1f}  BIC={bic:.1f}")
+    else:
+        print(f"  {r}")
 
     print("\n▶ Step 5: MEL — Apply transform")
     r = await dispatch_tool("apply_transform", {"method": "yeo-johnson"})

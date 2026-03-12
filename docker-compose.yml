@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   prepper:
     build: ./agents/prepper
@@ -13,7 +11,9 @@ services:
     restart: "no"
 
   dio:
-    build: ./agents/dio
+    build:
+      context: .
+      dockerfile: agents/dio/Dockerfile
     ports:
       - "${DIO_PORT:-7001}:7001"
     env_file: .env
@@ -25,7 +25,9 @@ services:
     restart: unless-stopped
 
   mel:
-    build: ./agents/mel
+    build:
+      context: .
+      dockerfile: agents/mel/Dockerfile
     ports:
       - "${MEL_PORT:-7002}:7002"
     env_file: .env
@@ -39,16 +41,18 @@ services:
     restart: unless-stopped
 
   simo:
-    build: ./agents/simo
+    build:
+      context: .
+      dockerfile: agents/simo/Dockerfile
     ports:
       - "${SIMO_PORT:-7003}:7003"
     env_file: .env
     environment:
       - SIMO_PORT=7003
-      - CHROMA_PERSIST_DIR=/artifacts/chroma
+      - CHROMA_PERSIST_DIR=/chroma
     volumes:
       - artifacts:/artifacts:ro
-      - chroma_data:/artifacts/chroma
+      - chroma_data:/chroma
     depends_on:
       - mel
     restart: unless-stopped

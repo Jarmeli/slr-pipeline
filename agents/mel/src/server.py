@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import asyncio
 import json
@@ -121,13 +121,22 @@ async def configure_run(request: Request) -> JSONResponse:
     test_size = float(body.get("test_size", 0.2))
     random_state = int(body.get("random_state", 42))
 
-    token = HandoffToken(**token_data)
+    try:
+        token = HandoffToken(**token_data)
+    except Exception as exc:
+        return JSONResponse(status_code=422, content={"error": f"Invalid handoff_token: {exc}"})
 
-    # Load data
+    # Load data — prefer CSV files; fall back to clean_data.claims_processed in DB
     try:
         df_claims, df_parcels, df_values = _trainer.load_training_data()
         df_pred, zip_dist_map = _trainer.build_zip_dist_map(df_parcels, df_values)
         df_train_raw = _trainer.prepare_training_df(df_claims, zip_dist_map)
+    except (FileNotFoundError, OSError):
+        # CSV files not mounted — load directly from DB
+        try:
+            df_train_raw, zip_dist_map, df_pred = await _trainer.prepare_from_db(token_data.get("tables", []))
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": f"DB data load failed: {exc}"})
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": f"Data load failed: {exc}"})
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import os
 from contextlib import asynccontextmanager
@@ -121,7 +121,7 @@ async def call_tool(tool_name: str, request: Request) -> JSONResponse:
 
     try:
         result = await fn(**body)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=result)
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
 

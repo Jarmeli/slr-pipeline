@@ -49,6 +49,57 @@ def load_from_db_token(token_tables: List[Dict[str, Any]]) -> pd.DataFrame:
     return asyncio.run(_fetch())
 
 
+async def prepare_from_db(token_tables: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, Dict[str, float], pd.DataFrame]:
+    """
+    Load and prepare training data entirely from clean_data.claims_processed.
+    Used as fallback when CSV files are unavailable.
+
+    DIO writes every column as TEXT, so numeric casts happen here.
+    zip_mean_dist is derived from the claims data (mean waterdepth per zip code).
+
+    Returns (df_train_raw, zip_dist_map, df_pred).
+    """
+    from shared.db import get_pool
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM clean_data.claims_processed LIMIT 100000")
+    df = pd.DataFrame([dict(r) for r in rows])
+
+    # Cast columns that were stored as TEXT by DIO
+    numeric_cols = [
+        "buildingdamageamount", "buildingpropertyvalue", "waterdepth",
+        "lowestfloorelevation", "totalbuildinginsurancecoverage",
+        "totalcontentsinsurancecoverage", "amountpaidonbuildingclaim",
+        "amountpaidoncontentsclaim", "latitude", "longitude",
+        "basefloodelevation", "elevationdifference", "lowestadjacentgrade",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.rename(columns={
+        "buildingdamageamount": "target",
+        "buildingpropertyvalue": "property_value",
+        "waterdepth": "flood_level",
+        "reportedzipcode": "zip_code",
+        "lowestfloorelevation": "elevation",
+    })
+
+    df = df.dropna(subset=["target", "property_value", "zip_code", "elevation", "flood_level"])
+    df["zip_code"] = df["zip_code"].astype(str).str.replace(r"\.0$", "", regex=True)
+
+    # Derive zip_mean_dist from claims: mean flood depth per zip code as proxy for
+    # mean distance to water (used consistently across train / predict)
+    zip_dist_map: Dict[str, float] = df.groupby("zip_code")["flood_level"].mean().to_dict()
+    df["zip_mean_dist"] = df["zip_code"].map(zip_dist_map).fillna(0.0)
+
+    df_pred = df[["property_value", "elevation", "zip_code", "zip_mean_dist"]].copy()
+    df_pred["elevation_ft"] = df_pred["elevation"].fillna(0.0) * METERS_TO_FEET
+
+    return df, zip_dist_map, df_pred
+
+
 # ── Feature engineering ───────────────────────────────────────────────────────
 
 def build_zip_dist_map(df_parcels: pd.DataFrame, df_values: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, float]]:

@@ -5,13 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY agents/dio/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared utilities
-COPY ../../shared /app/shared
-
-COPY src/ ./src/
+COPY shared/ ./shared/
+COPY agents/dio/src/ ./src/
 
 EXPOSE 7001
 
