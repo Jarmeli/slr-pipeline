@@ -206,7 +206,7 @@ def build_models(params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             random_state=42,
         ),
         "Hist Gradient Boosting": HistGradientBoostingRegressor(
-            loss="poisson",
+            loss="squared_error",
             max_iter=defaults.get("n_estimators", 500),
             random_state=42,
         ),

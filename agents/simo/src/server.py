@@ -128,6 +128,7 @@ async def run_simulation_endpoint(request: Request) -> JSONResponse:
             flood_levels=flood_levels,
             zip_dist_map=_artifact_token.zip_dist_map,
             one_hot_cols=_artifact_token.one_hot_cols,
+            feature_cols=_artifact_token.feature_cols,
         )
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})

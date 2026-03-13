@@ -37,6 +37,7 @@ def _build_parcel_features(
     flood_level_ft: float,
     zip_dist_map: Dict[str, float],
     one_hot_cols: List[str],
+    feature_cols: List[str],
 ) -> pd.DataFrame:
     """Build the feature matrix for the parcel dataset at a given flood level."""
     d = df.copy()
@@ -44,6 +45,7 @@ def _build_parcel_features(
     # Ensure required columns exist
     if "elevation_ft" not in d.columns and "elevation" in d.columns:
         d["elevation_ft"] = d["elevation"] * METERS_TO_FEET
+        d = d.drop(columns=["elevation"])
 
     d["flood_level"] = flood_level_ft
     d["zip_mean_dist"] = d["zip_code"].map(zip_dist_map).fillna(
@@ -60,9 +62,6 @@ def _build_parcel_features(
         if zc in d.columns:
             d.loc[_, zc] = 1
 
-    base_cols = ["property_value", "elevation_ft", "flood_level", "zip_mean_dist"]
-    # Rename elevation_ft → elevation to match training feature name
-    feature_cols = ["property_value", "elevation", "flood_level", "zip_mean_dist"] + one_hot_cols
     d = d.rename(columns={"elevation_ft": "elevation"})
 
     # Ensure all feature cols are present
@@ -78,6 +77,7 @@ async def run_simulation(
     flood_levels: List[float],
     zip_dist_map: Dict[str, float],
     one_hot_cols: List[str],
+    feature_cols: List[str],
 ) -> Dict[str, Any]:
     """
     Run flood damage simulation for each level and write to parcel_damage table.
@@ -98,8 +98,8 @@ async def run_simulation(
             SELECT
                 p.gid,
                 p."FLN"           AS parcel_id,
-                p.elev_mean       AS elevation,
-                p."ZCTA5CE20"     AS zip_code,
+                5.0::float8       AS elevation,
+                '00000'           AS zip_code,
                 p.geometry
             FROM public.parcels_cliplayer p
             LIMIT 500000
@@ -117,7 +117,10 @@ async def run_simulation(
     all_records: List[Dict[str, Any]] = []
 
     for level in flood_levels:
-        X = _build_parcel_features(df_base, level, zip_dist_map, one_hot_cols)
+        X = _build_parcel_features(df_base, level, zip_dist_map, one_hot_cols, feature_cols)
+        with open("/tmp/debug.txt", "w") as f:
+            f.write(f"X columns: {list(X.columns)}\n")
+            f.write(f"model features: {list(getattr(model, 'feature_names_in_', []))}\n")
         preds = np.maximum(model.predict(X), 0.0)
         df_base[f"pred_{level}ft"] = preds
 
