@@ -165,7 +165,20 @@ async def configure_run(request: Request) -> JSONResponse:
         "best_model": None,
         "best_metrics": None,
         "transform": None,
+        # Explicitly clear any stale transformed target from a prior run.
+        # Without this, _run_state.update() leaves the old y_train_transformed
+        # in the dict, causing train_ensemble to train on a different run's
+        # transformed y while evaluating against this run's raw y_test.
+        "y_train_transformed": None,
     })
+
+    # Sample data for UI visualizations (EDA distributions)
+    sample_df = df_train_raw.sample(n=min(5000, len(df_train_raw))) if len(df_train_raw) > 0 else df_train_raw
+    dist_data = {
+        "target": sample_df["target"].tolist() if "target" in sample_df.columns else sample_df.get(target_col, []).tolist(),
+        "property_value": sample_df["property_value"].tolist() if "property_value" in sample_df.columns else [],
+        "flood_level": sample_df["flood_level"].tolist() if "flood_level" in sample_df.columns else []
+    }
 
     return JSONResponse(content={
         "status": "ok",
@@ -173,6 +186,8 @@ async def configure_run(request: Request) -> JSONResponse:
         "X_train_shape": list(X_train.shape),
         "X_test_shape": list(X_test.shape),
         "feature_count": len(feature_cols),
+        "feature_cols": feature_cols,
+        "distributions": dist_data
     })
 
 
@@ -208,11 +223,19 @@ async def train_ensemble_endpoint(request: Request) -> JSONResponse:
     if "X_train" not in _run_state:
         return JSONResponse(status_code=400, content={"error": "Run not configured."})
 
-    y_train = _run_state.get("y_train_transformed", _run_state["y_train"])
+    # Use transformed target if apply_transform was called; fall back to raw y_train.
+    # dict.get() returns None when key exists with value None, so use 'or' instead.
+    y_train = _run_state.get("y_train_transformed") if _run_state.get("y_train_transformed") is not None else _run_state["y_train"]
+
     fitted = _trainer.train_models(_run_state["X_train"], y_train, model_names)
     _run_state["fitted_models"] = fitted
 
-    metrics_df = _evaluator.evaluate_models(fitted, _run_state["X_test"], _run_state["y_test"])
+    metrics_df = _evaluator.evaluate_models(
+        fitted,
+        _run_state["X_test"],
+        _run_state["y_test"],
+        transformer=_run_state.get("transform"),
+    )
     _run_state["metrics_df"] = metrics_df
 
     return JSONResponse(content={"models_trained": list(fitted.keys()), "metrics": metrics_df.to_dict(orient="records")})
@@ -241,7 +264,7 @@ async def export_artifacts_endpoint(request: Request) -> JSONResponse:
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(_run_state["best_model"], artifact_dir / "model.pkl")
-    if _run_state.get("transform"):
+    if _run_state.get("transform") is not None:
         joblib.dump(_run_state["transform"], artifact_dir / "transformer.pkl")
 
     meta = {

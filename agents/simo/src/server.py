@@ -13,8 +13,9 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from shared.db import audit, close_pool, get_pool, write_audit
 from shared.schemas import ArtifactToken, SimulationResult
@@ -26,6 +27,7 @@ UI_DIR = Path(__file__).resolve().parent / "ui"
 # Cached artifact token (set when run_simulation is called)
 _artifact_token: Optional[ArtifactToken] = None
 _last_report: Optional[Dict[str, Any]] = None
+_last_prediction_table: str = "public.parcels_cliplayer"
 
 
 @asynccontextmanager
@@ -36,6 +38,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SIMO — Scenario & Inference Model", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 if UI_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
@@ -91,6 +100,18 @@ async def list_tools() -> List[Dict[str, Any]]:
             },
         },
         {
+            "name": "get_report_summary",
+            "description": "Return an executive summary of the most affected areas (ZIP codes) and highest risk parcels.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "flood_level": {"type": "number", "default": 1.0},
+                    "limit": {"type": "integer", "default": 5}
+                },
+                "required": [],
+            },
+        },
+        {
             "name": "chat",
             "description": "Ask a natural-language question about simulation results (RAG).",
             "parameters": {
@@ -123,12 +144,19 @@ async def run_simulation_endpoint(request: Request) -> JSONResponse:
     flood_levels = body.get("flood_levels", [1, 2, 3, 4, 5])
 
     try:
+        parcel_table = body.get("parcel_table", "public.parcels_cliplayer")
+        global _last_prediction_table
+        _last_prediction_table = parcel_table
+        
         report = await _sim.run_simulation(
             artifact_dir=_artifact_token.artifact_dir,
             flood_levels=flood_levels,
             zip_dist_map=_artifact_token.zip_dist_map,
             one_hot_cols=_artifact_token.one_hot_cols,
             feature_cols=_artifact_token.feature_cols,
+            value_table=body.get("value_table"),
+            value_col=body.get("value_col"),
+            parcel_table=parcel_table,
         )
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
@@ -166,6 +194,124 @@ async def invalidate_cache_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(content=result)
 
 
+@app.get("/tiles/parcel_damage/{z}/{x}/{y}.pbf")
+async def get_parcel_damage_tile(z: int, x: int, y: int, flood_level: float = 1.0):
+    """Dynamically stream Mapbox Vector Tiles matching postGIS parcel geometries with ML damage output."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Join with parcels_cliplayer for geometry, as it's the known spatial baseline.
+            # parcel_damage always uses gid which is consistent across these tables.
+            sql = """
+            SELECT ST_AsMVT(mvtgeom, 'parcel_damage')
+            FROM (
+                SELECT 
+                    d.predicted_damage,
+                    ST_AsMVTGeom(p.geometry, ST_TileEnvelope($1, $2, $3)) AS mvtgeom
+                FROM parcel_damage d
+                JOIN public.parcels_cliplayer p ON p.gid = d.parcel_gid
+                WHERE d.flood_level = $4
+                  AND p.geometry && ST_TileEnvelope($1, $2, $3)
+            ) AS mvtgeom
+            """
+            row = await conn.fetchrow(sql, z, x, y, flood_level)
+            if row and row["mvt"]:
+                return Response(content=row["mvt"], media_type="application/x-protobuf")
+            else:
+                return Response(status_code=204) # No Content is cleaner than 404 for missing tiles
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.post("/call/regional_stats")
+async def regional_stats(request: Request) -> JSONResponse:
+    """Calculate aggregated stats for a specific GeoJSON polygon selection."""
+    body = await request.json()
+    polygon = body.get("polygon")
+    flood_level = float(body.get("flood_level", 1.0))
+    
+    if not polygon:
+        return JSONResponse(status_code=400, content={"error": "Polygon GeoJSON required"})
+        
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Intersect parcel_damage results with the user-drawn polygon
+            sql = """
+            SELECT 
+                COUNT(*) as parcel_count,
+                SUM(d.predicted_damage) as total_exposure,
+                AVG(d.predicted_damage) as mean_damage
+            FROM parcel_damage d
+            JOIN parcels_cliplayer p ON p.gid = d.parcel_gid
+            WHERE ST_Intersects(p.geometry, ST_SetSRID(ST_GeomFromGeoJSON($1), 4326))
+              AND d.flood_level = $2
+            """
+            row = await conn.fetchrow(sql, json.dumps(polygon), flood_level)
+            
+            return JSONResponse(content={
+                "parcel_count": row["parcel_count"],
+                "total_exposure": float(row["total_exposure"]) if row["total_exposure"] else 0,
+                "mean_damage": float(row["mean_damage"]) if row["mean_damage"] else 0
+            })
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.post("/call/get_report_summary")
+async def get_report_summary(request: Request) -> JSONResponse:
+    body = await request.json()
+    flood_level = float(body.get("flood_level", 1.0))
+    limit = int(body.get("limit", 5))
+    
+    # We try to find the metadata in parcels_clean first, then fallback to cliplayer
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Check which table to use for metadata (elev, zip)
+            meta_table = "public.parcels_clean"
+            try:
+                await conn.execute(f"SELECT elev_mean FROM {meta_table} LIMIT 1")
+            except:
+                meta_table = "public.parcels_cliplayer"
+
+            # Top ZIP codes by impact
+            zip_sql = f"""
+            SELECT 
+                COALESCE(p."ZCTA5CE20"::text, p."zip_code"::text, '00000') as zip_code,
+                SUM(d.predicted_damage) as total_damage,
+                COUNT(*) as affected_parcels
+            FROM parcel_damage d
+            JOIN {meta_table} p ON p.gid = d.parcel_gid
+            WHERE d.flood_level = $1
+            GROUP BY 1
+            ORDER BY total_damage DESC
+            LIMIT $2
+            """
+            top_zips = await conn.fetch(zip_sql, flood_level, limit)
+            
+            # Top Parcels by impact
+            parcel_sql = f"""
+            SELECT 
+                COALESCE(p."FLN"::text, p.gid::text) as parcel_id,
+                d.predicted_damage,
+                COALESCE(p.elev_mean::float8, 5.0) as elevation
+            FROM parcel_damage d
+            JOIN {meta_table} p ON p.gid = d.parcel_gid
+            WHERE d.flood_level = $1
+            ORDER BY d.predicted_damage DESC
+            LIMIT $2
+            """
+            top_parcels = await conn.fetch(parcel_sql, flood_level, limit)
+            
+            return JSONResponse(content={
+                "top_zip_codes": [dict(r) for r in top_zips],
+                "top_parcels": [dict(r) for r in top_parcels]
+            })
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 @app.post("/call/chat")
 async def chat_endpoint(request: Request) -> JSONResponse:
     body = await request.json()
@@ -194,6 +340,7 @@ async def call_tool(tool_name: str, request: Request) -> JSONResponse:
         "load_artifact": load_artifact_endpoint,
         "run_simulation": run_simulation_endpoint,
         "get_report": get_report_endpoint,
+        "get_report_summary": get_report_summary,
         "invalidate_tile_cache": invalidate_cache_endpoint,
         "chat": chat_endpoint,
     }

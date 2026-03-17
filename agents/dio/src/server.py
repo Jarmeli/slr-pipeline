@@ -97,14 +97,28 @@ async def list_tools() -> List[Dict[str, Any]]:
         },
         {
             "name": "export_handoff",
-            "description": "Build a HandoffToken for MEL containing clean_data table info.",
+            "description": "Build a HandoffToken for MEL containing table info.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "target_col":   {"type": "string", "default": "buildingdamageamount"},
                     "feature_cols": {"type": "array", "items": {"type": "string"}},
+                    "source_table": {"type": "string"},
+                    "source_schema": {"type": "string", "default": "clean_data"},
                 },
                 "required": [],
+            },
+        },
+        {
+            "name": "get_table_extent",
+            "description": "Calculate the spatial bounding box (extent) of a table's geometry column.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table":  {"type": "string"},
+                    "schema": {"type": "string", "default": "public"},
+                },
+                "required": ["table"],
             },
         },
     ]
@@ -148,9 +162,16 @@ async def clean_claims_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(content=result)
 
 
-@app.get("/handoff")
-async def handoff() -> JSONResponse:
-    result = await _tools.export_handoff()
+@app.post("/handoff")
+async def handoff(request: Request) -> JSONResponse:
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    result = await _tools.export_handoff(**body)
+    return JSONResponse(content=result)
+
+
+@app.get("/table-extent")
+async def table_extent(table: str, schema: str = "public") -> JSONResponse:
+    result = await _tools.get_table_extent(table, schema)
     return JSONResponse(content=result)
 
 

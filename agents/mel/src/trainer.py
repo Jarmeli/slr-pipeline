@@ -61,9 +61,15 @@ async def prepare_from_db(token_tables: List[Dict[str, Any]]) -> Tuple[pd.DataFr
     """
     from shared.db import get_pool
 
+    table_name = "claims_processed"
+    schema_name = "clean_data"
+    if token_tables:
+        table_name = token_tables[0]["name"]
+        schema_name = token_tables[0].get("schema", "clean_data")
+
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM clean_data.claims_processed LIMIT 100000")
+        rows = await conn.fetch(f'SELECT * FROM "{schema_name}"."{table_name}" LIMIT 100000')
     df = pd.DataFrame([dict(r) for r in rows])
 
     # Cast columns that were stored as TEXT by DIO

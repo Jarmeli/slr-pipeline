@@ -19,6 +19,9 @@ services:
     env_file: .env
     environment:
       - DIO_PORT=7001
+    volumes:
+      - "./agents/dio/src:/app/src"
+      - "./shared:/app/shared"
     depends_on:
       prepper:
         condition: service_started
@@ -36,6 +39,8 @@ services:
     volumes:
       - artifacts:/artifacts
       - mel_data:/data
+      - "./agents/mel/src:/app/src"
+      - "./shared:/app/shared"
     depends_on:
       - dio
     restart: unless-stopped
@@ -53,6 +58,8 @@ services:
     volumes:
       - artifacts:/artifacts:ro
       - chroma_data:/chroma
+      - "./agents/simo/src:/app/src"
+      - "./shared:/app/shared"
     depends_on:
       - mel
     restart: unless-stopped

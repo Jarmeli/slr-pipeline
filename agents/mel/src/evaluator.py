@@ -14,13 +14,29 @@ def evaluate_models(
     fitted_models: Dict[str, Any],
     X_test: pd.DataFrame,
     y_test: np.ndarray,
+    transformer: Any = None,
 ) -> pd.DataFrame:
-    """Return a DataFrame with R², Adj-R², MSE, RMSE for each model."""
+    """Return a DataFrame with R², Adj-R², MSE, RMSE for each model.
+
+    If a power transformer (e.g. Yeo-Johnson) was used during training,
+    pass it here so predictions are inverse-transformed back to the original
+    dollar scale before metrics are computed against y_test.
+    """
     n = X_test.shape[0]
     k = X_test.shape[1]
     rows = []
     for name, model in fitted_models.items():
-        preds = np.maximum(model.predict(X_test), 0)
+        raw_preds = model.predict(X_test)
+
+        # Inverse-transform if the model was trained on a transformed target
+        if transformer is not None and hasattr(transformer, "inverse_transform"):
+            preds = transformer.inverse_transform(raw_preds.reshape(-1, 1)).ravel()
+        elif transformer == ("log",):
+            preds = np.expm1(raw_preds)
+        else:
+            preds = raw_preds
+
+        preds = np.maximum(preds, 0)
         r2 = r2_score(y_test, preds)
         mse = mean_squared_error(y_test, preds)
         rmse = float(np.sqrt(mse))
@@ -36,6 +52,7 @@ def evaluate_models(
         )
     df = pd.DataFrame(rows).sort_values("R2", ascending=False).reset_index(drop=True)
     return df
+
 
 
 def select_best(metrics_df: pd.DataFrame, metric: str = "R2") -> ModelMetrics:

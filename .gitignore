@@ -1,4 +1,9 @@
+# Secrets & environment
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -9,10 +14,41 @@ dist/
 build/
 .venv/
 venv/
+
+# ML artifacts & model files
 *.pkl
 *.joblib
 /artifacts/
+
+# Database / vector store
 chroma_data/
+*.sqlite
+
+# Raw & exported data (can be large)
+*.csv
+*.geojson
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+
+# Logs & debug
 *.log
+/tmp/
+
+# Streamlit
+.streamlit/
+
+# macOS
 .DS_Store
+
+# Notebooks (project-specific)
+collier_ensemble.ipynb
+
+# Project directories excluded from VCS
 daily_log/
+presentations/
+
+# Future-proofing
+node_modules/

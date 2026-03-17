@@ -52,15 +52,10 @@ def _build_parcel_features(
         np.mean(list(zip_dist_map.values()))
     )
 
-    # Seed one-hot columns with zeros, fill known values
+    # Vectorized One-Hot Encoding for ZIP codes
     for col in one_hot_cols:
-        d[col] = 0
-
-    # Map zip_code → one-hot column
-    for _, row in d.iterrows():
-        zc = f"zip_{row['zip_code']}"
-        if zc in d.columns:
-            d.loc[_, zc] = 1
+        zip_val = col.replace("zip_", "")
+        d[col] = (d["zip_code"].astype(str) == zip_val).astype(int)
 
     d = d.rename(columns={"elevation_ft": "elevation"})
 
@@ -78,6 +73,9 @@ async def run_simulation(
     zip_dist_map: Dict[str, float],
     one_hot_cols: List[str],
     feature_cols: List[str],
+    value_table: Optional[str] = None,
+    value_col: Optional[str] = None,
+    parcel_table: str = "public.parcels_cliplayer",
 ) -> Dict[str, Any]:
     """
     Run flood damage simulation for each level and write to parcel_damage table.
@@ -91,26 +89,64 @@ async def run_simulation(
 
     pool = await get_pool()
 
-    # Load parcels
+    # Load parcels — use real columns with COALESCE fallbacks.
+    # We join with parcels_cliplayer ONLY if parcel_table is NOT that table, 
+    # to ensure we always have ZCTA/Elevation if the provided table is sparse.
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
+        if value_table and value_col:
+            # Join with custom table for real property values.
+            # We use a TRY-CAST logic by filtering out non-numeric FLNs if possible,
+            # but standard SQL cast is fine if data is clean.
+            query = f"""
             SELECT
                 p.gid,
-                p."FLN"           AS parcel_id,
-                5.0::float8       AS elevation,
-                '00000'           AS zip_code,
-                p.geometry
-            FROM public.parcels_cliplayer p
+                p."FLN"                                        AS parcel_id,
+                COALESCE(p.elev_mean::float8, 5.0)              AS elevation,
+                COALESCE(p."ZCTA5CE20"::text, '00000')         AS zip_code,
+                COALESCE(v."{value_col}"::float8, 200000.0)    AS property_value
+            FROM {parcel_table} p
+            LEFT JOIN {value_table} v ON v.parcelid::text = p."FLN"::text
+            WHERE p."FLN" IS NOT NULL
             LIMIT 500000
             """
-        )
+        else:
+            query = f"""
+            SELECT
+                p.gid,
+                p."FLN"                                        AS parcel_id,
+                COALESCE(p.elev_mean::float8, 5.0)              AS elevation,
+                COALESCE(p."ZCTA5CE20"::text, '00000')         AS zip_code,
+                200000.0::float8                               AS property_value
+            FROM {parcel_table} p
+            WHERE p."FLN" IS NOT NULL
+            LIMIT 500000
+            """
+        try:
+            rows = await conn.fetch(query)
+        except Exception as e:
+             # Fallback: if 'p' doesn't have elev_mean or ZCTA, try joining with cliplayer
+             if "elev_mean" in str(e) or "ZCTA5CE20" in str(e):
+                query = f"""
+                SELECT
+                    p.gid,
+                    p."FLN"                                        AS parcel_id,
+                    COALESCE(orig.elev_mean::float8, 5.0)           AS elevation,
+                    COALESCE(orig."ZCTA5CE20"::text, '00000')      AS zip_code,
+                    {'v."' + value_col + '"::float8' if value_table else '200000.0::float8'} AS property_value
+                FROM {parcel_table} p
+                JOIN public.parcels_cliplayer orig ON orig.gid = p.gid
+                {f'JOIN {value_table} v ON v.parcelid = CASE WHEN p."FLN" ~ "^[0-9]+$" THEN p."FLN"::bigint ELSE NULL END' if value_table else ''}
+                LIMIT 500000
+                """
+                rows = await conn.fetch(query)
+             else:
+                raise e
 
     if not rows:
         return {"error": "No parcels found in parcels_cliplayer"}
 
     df_base = pd.DataFrame([dict(r) for r in rows])
-    df_base["property_value"] = 200000.0  # placeholder; replace with real values if joined
+    # Cast/Clean zip code
     df_base["zip_code"] = df_base["zip_code"].astype(str).str.replace(r"\.0$", "", regex=True)
 
     results_by_level: Dict[str, Any] = {}
@@ -118,10 +154,17 @@ async def run_simulation(
 
     for level in flood_levels:
         X = _build_parcel_features(df_base, level, zip_dist_map, one_hot_cols, feature_cols)
-        with open("/tmp/debug.txt", "w") as f:
-            f.write(f"X columns: {list(X.columns)}\n")
-            f.write(f"model features: {list(getattr(model, 'feature_names_in_', []))}\n")
-        preds = np.maximum(model.predict(X), 0.0)
+        
+        # Debug logging
+        print(f"[SIMO] Level {level}ft features shape: {X.shape}")
+        if not X.empty:
+            print(f"[SIMO] Mean property_value: {X['property_value'].mean():.2f}")
+            print(f"[SIMO] Mean elevation: {X['elevation'].mean():.2f}")
+        
+        raw_preds = model.predict(X)
+        print(f"[SIMO] Raw predictions (mean): {raw_preds.mean():.4f}, (max): {raw_preds.max():.4f}, (min): {raw_preds.min():.4f}")
+        
+        preds = np.maximum(raw_preds, 0.0)
         df_base[f"pred_{level}ft"] = preds
 
         results_by_level[f"{level}ft"] = {

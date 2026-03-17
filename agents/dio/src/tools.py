@@ -23,9 +23,9 @@ async def list_raw_tables() -> List[Dict[str, str]]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT table_name, table_type
+            SELECT table_schema, table_name, table_type
             FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema IN ('public', 'clean_data')
             ORDER BY table_name
             """
         )
@@ -56,6 +56,35 @@ async def describe_table(table: str, schema: str = "public") -> Dict[str, Any]:
         "columns": [dict(c) for c in cols],
         "row_count": count_row["n"],
     }
+
+
+@audit("DIO")
+async def get_table_extent(table: str, schema: str = "public") -> Dict[str, Any]:
+    """Calculate the spatial bounding box (extent) of a table's geometry column."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Check for geometry columns
+        geom_col_row = await conn.fetchrow(
+            """
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_schema = $1 AND table_name = $2 AND data_type = 'USER-DEFINED'
+            LIMIT 1
+            """,
+            schema, table
+        )
+        if not geom_col_row:
+            return {"error": f"No geometry column found in {schema}.{table}"}
+            
+        geom_col = geom_col_row["column_name"]
+        extent_row = await conn.fetchrow(
+            f'SELECT ST_Extent("{geom_col}") as box FROM "{schema}"."{table}"'
+        )
+        # ST_Extent returns string like "BOX(xmin ymin, xmax ymax)"
+        if not extent_row or not extent_row["box"]:
+            return {"error": "Empty or null extent"}
+            
+        return {"table": table, "extent": extent_row["box"]}
 
 
 @audit("DIO")
@@ -208,10 +237,12 @@ async def eda_summary(table: str, schema: str = "clean_data") -> Dict[str, Any]:
 async def export_handoff(
     target_col: str = "buildingdamageamount",
     feature_cols: Optional[List[str]] = None,
+    source_table: Optional[str] = None,
+    source_schema: str = "clean_data",
 ) -> Dict[str, Any]:
     """
     Build and return a HandoffToken for MEL, listing available
-    clean_data tables with row counts.
+    clean_data or public tables.
     """
     if feature_cols is None:
         feature_cols = [
@@ -221,14 +252,18 @@ async def export_handoff(
         ]
 
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        tables_rows = await conn.fetch(
-            """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'clean_data'
-            """
-        )
+    
+    if source_table:
+        tables_rows = [{"table_name": source_table}]
+    else:
+        async with pool.acquire() as conn:
+            tables_rows = await conn.fetch(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'clean_data'
+                """
+            )
 
     table_infos: List[TableInfo] = []
     async with pool.acquire() as conn:
@@ -237,22 +272,22 @@ async def export_handoff(
             cols = await conn.fetch(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'clean_data' AND table_name = $1
+                WHERE table_schema = $1 AND table_name = $2
                 """,
-                tname,
+                source_schema, tname,
             )
-            cnt = await conn.fetchval(f'SELECT COUNT(*) FROM clean_data."{tname}"')
+            cnt = await conn.fetchval(f'SELECT COUNT(*) FROM "{source_schema}"."{tname}"')
             table_infos.append(
                 TableInfo(
                     name=tname,
-                    schema="clean_data",
+                    schema=source_schema,
                     row_count=int(cnt),
                     columns=[r["column_name"] for r in cols],
                 )
             )
 
     token = HandoffToken(
-        schema_name="clean_data",
+        schema_name=source_schema,
         tables=table_infos,
         feature_cols=feature_cols,
         target_col=target_col,

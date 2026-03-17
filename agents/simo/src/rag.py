@@ -21,7 +21,9 @@ _llm_client: Optional[OpenAI] = None
 def _get_chroma() -> chromadb.Collection:
     global _chroma_client, _collection
     if _collection is None:
-        _chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+        # Disable telemetry to prevent crashes in restricted network/env
+        settings = chromadb.Settings(anonymized_telemetry=False)
+        _chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR, settings=settings)
         _collection = _chroma_client.get_or_create_collection(
             name="slr_reports",
             metadata={"hnsw:space": "cosine"},
