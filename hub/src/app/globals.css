@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@theme {
+  --color-navy: #0A192F;
+  --color-navy-light: #112240;
+  --color-navy-lighter: #233554;
+  --color-teal: #20B2AA;
+  --color-teal-light: #64FFDA;
+  --font-inter: "Inter", sans-serif;
+  --font-roboto: "Roboto", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-white text-navy font-inter antialiased;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-teal text-white px-6 py-2.5 rounded-sm font-semibold transition-all duration-200 
+           hover:bg-teal/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed
+           flex items-center justify-center gap-2 tracking-wide text-sm uppercase;
+  }
+
+  .btn-outline {
+    @apply border border-teal text-teal px-6 py-2.5 rounded-sm font-semibold transition-all duration-200 
+           hover:bg-teal/5 active:scale-[0.98] disabled:opacity-50
+           flex items-center justify-center gap-2 tracking-wide text-sm uppercase;
+  }
+
+  .card {
+    @apply bg-white border border-slate-200 shadow-sm rounded-sm p-8 transition-shadow duration-300;
+  }
+
+  .card-hover {
+    @apply hover:shadow-md hover:border-teal/30;
+  }
+
+  .input-field {
+    @apply w-full bg-slate-100 border border-slate-200 px-4 py-3 rounded-sm text-navy focus:outline-none 
+           focus:border-teal/50 focus:ring-1 focus:ring-teal/50 transition-all duration-200
+           placeholder:text-slate-400 text-sm;
+  }
+
+  .label-text {
+    @apply block text-[10px] uppercase font-bold tracking-widest text-slate-500 mb-2;
+  }
+
+  .tab-inactive {
+    @apply text-slate-400 border-b-2 border-transparent px-4 py-6 cursor-pointer transition-all duration-200 
+           hover:text-navy font-medium text-sm flex items-center gap-3;
+  }
+
+  .tab-active {
+    @apply text-teal border-b-2 border-teal px-4 py-6 cursor-pointer font-bold text-sm flex items-center gap-3;
+  }
+}
+
+.graph-container {
+  @apply w-full h-[400px] border border-slate-200 bg-slate-50 relative overflow-hidden;
+}
+
+/* Custom Scrollbar for Academic Feel */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-slate-100;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full border-2 border-slate-100 hover:bg-slate-400;
+}

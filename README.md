@@ -1,47 +1,43 @@
-# SLR Multi-Agent MCP Pipeline
+# SLR Multi-Agent MCP Pipeline (v2)
 
-A four-agent pipeline for sea level rise flood damage modeling, built on a Model Context Protocol (MCP) architecture. A unified **Streamlit UI** orchestrates the full workflow (Phase 0 → 3) through a split-screen conversational interface backed by four FastAPI microservices. When the LLM is unavailable, the CLI orchestrator runs a direct sequential fallback automatically.
+A sophisticated four-agent pipeline for sea level rise flood damage modeling, built on a **Model Context Protocol (MCP)** architecture. 
 
-```
-Prepper (7004) → DIO (7001) → MEL (7002) → SIMO (7003)
-```
+The primary interface is the **Next.js Orchestration Hub** (`hub/`)—a professional control plane that manages the full workflow (Phase 0 → 3) from a unified, academic-style dashboard. The system coordinates three specialized AI agents (DIO, MEL, SIMO) and a deterministic configuration wizard (Prepper) through a high-fidelity workspace.
 
-```bash
-# Unified UI — the recommended way to run the pipeline
-streamlit run ui/app.py
+```mermaid
+graph TD
+    User -->|Phase 0| Prepper[Prepper Config]
+    Prepper -->|Verify| PostgreSQL[(PostGIS DB)]
+    PostgreSQL -->|Phase 1| DIO[DIO: Data Operator]
+    DIO -->|Phase 2| MEL[MEL: Model Evaluator]
+    MEL -->|Phase 3| SIMO[SIMO: Impact Modeler]
+    SIMO -->|Simulation| User
 ```
 
 ---
 
 ## Architecture
 
-| Agent | Role | Port |
+| Component | Role | Tech Stack |
 |-------|------|------|
-| **Prepper** | Setup wizard — configures and launches all other agents | 7004 |
-| **DIO** | Data Ingestion & Operations — PostGIS tools, spatial clipping, NFIP cleaning | 7001 |
-| **MEL** | Model Ensemble Learner — GMM + ensemble training, artifact export | 7002 |
-| **SIMO** | Scenario & Inference — flood simulation, parcel_damage write, RAG chat, MVT tiles | 7003 |
-
-All agents expose an MCP-compatible tool manifest at `GET /tools` and accept tool calls at `POST /call/<tool_name>`.
+| **Next.js Hub** | **Primary Control Plane** — Central orchestration & workspace | Next.js, Tailwind, Zustand, React Flow |
+| **Prepper** | Setup wizard — verifies DB & LLM credentials | Deterministic React UI |
+| **DIO** | Data Operator — PostGIS discovery, spatial clipping | Python, FastAPI, PostGIS |
+| **MEL** | Model Evaluator — Ensemble learning, R² / RMSE metrics | Python, Scikit-learn, XGBoost |
+| **SIMO** | Impact Modeler — Flood simulation, MVT tiles, RAG chat | Python, Leaflet, ChromaDB |
 
 ---
 
-## Streamlit UI
+## Simulator Workspace
 
-The primary interface is a **split-screen Streamlit app** (`ui/app.py`):
+The Hub provides a split-screen **Simulator Workspace**:
 
 | Panel | Content |
 |-------|---------|
-| **Left — Agent Chat** | Conversational NL orchestrator. Phases 0–2: study design via regex parser. Phase 3: routes chat to SIMO RAG/LLM for natural-language queries about simulation results. |
-| **Right — Visual Canvas** | Phase-specific interactive views: DIO clip map, MEL EDA + training metrics, SIMO dual-layer inundation map. |
+| **Left — Orchestrator** | Persistent AI chat interface for multi-agent coordination. |
+| **Right — Agent Canvas** | Dynamic, agent-specific interactive views: **Leaflet Map** with PostGIS Browser (DIO), **Analytics Dashboard** (MEL), and **Scenario Sliders** (SIMO). |
 
-### SIMO Map Tabs
-
-| Tab | Description |
-|-----|-------------|
-| 🚀 County-wide View | PyDeck dual-layer map — NOAA SLR inundation raster + MVT parcel damage overlay with layer toggles |
-| 🔬 Regional Assessment | Folium draw tool for polygon selection → localized damage stats |
-| 💬 SIMO Chat | Embedded RAG chat backed by ChromaDB + LM Studio |
+---
 
 ---
 
@@ -49,200 +45,42 @@ The primary interface is a **split-screen Streamlit app** (`ui/app.py`):
 
 ### Prerequisites
 
+- Node.js 18+ and npm
 - Docker Desktop
-- Access to the Azure PostgreSQL database (`sea-level-rise.postgres.database.azure.com`)
-- Python 3.10+ with `pip`
-- (Optional) Ollama running on Azure VM for LLM orchestration — see [Azure VM / Ollama Setup](#azure-vm--ollama-setup)
+- Access to the Azure PostgreSQL database
+- Python 3.10+
 
 ### 1. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env — fill in PGPASSWORD and (optionally) LM_STUDIO_URL
+# Fill in PGPASSWORD and LM_STUDIO_URL
 ```
 
-Key `.env` values:
+### 2. Start MCP Agents (Backend)
 
-```dotenv
-PGHOST=sea-level-rise.postgres.database.azure.com
-PGUSER=SLRuser
-PGPASSWORD=<your-password>
-PGDATABASE=SeaLevelRise
-PGSSL=true
-
-# Ollama on Azure VM (or any OpenAI-compatible endpoint)
-LM_STUDIO_URL=http://<azure-vm-public-ip>:11434/v1
-LM_STUDIO_MODEL=mistral:7b-instruct
-
-# ChromaDB persist directory (SIMO RAG knowledge base)
-CHROMA_PERSIST_DIR=/artifacts/chroma
-
-# Service URLs (Streamlit UI reads these)
-DIO_URL=http://localhost:7001
-MEL_URL=http://localhost:7002
-SIMO_URL=http://localhost:7003
-
-# Ports — port 7000 conflicts with macOS AirPlay Receiver
-PREPPER_PORT=7004
-```
-
-### 2. Initialize the database (once)
-
-```bash
-PGPASSWORD=<pw> psql \
-  "host=sea-level-rise.postgres.database.azure.com port=5432 user=SLRuser dbname=SeaLevelRise sslmode=require" \
-  -f scripts/init_db.sql
-```
-
-Creates the `clean_data` schema and `agent_audit_log` table.
-
-### 3. Start agents
+The backend agents (DIO, MEL, SIMO) are containerized:
 
 ```bash
 docker compose up --build
 ```
 
-Or via the Prepper setup UI:
+### 3. Launch the Next.js Orchestration Hub
+
+The Hub is the primary control plane for the pipeline:
 
 ```bash
-docker compose up prepper
-# Open http://localhost:7004
+cd hub
+npm install
+npm run dev
+# Open http://localhost:3000
 ```
 
-### 4. Launch the Streamlit UI
+### 4. Verification
 
-```bash
-cd ui
-pip install -r requirements.txt
-streamlit run app.py
-# Open http://localhost:8501
-```
-
-### 5. (Alternative) Run the pipeline from CLI
-
-```bash
-pip install -r requirements.txt
-python orchestrator.py --levels 1 2 3 4 5
-```
-
-The orchestrator first tries LLM-driven tool calling. If the model doesn't support function calling (e.g. `phi3:mini`), it automatically falls back to direct sequential execution.
-
----
-
-## Data Layout
-
-The pipeline expects the following table layout in the `SeaLevelRise` PostgreSQL database:
-
-| Schema | Table | Description |
-|--------|-------|-------------|
-| `public` | `collier_claims` | Raw NFIP claims (read by DIO) |
-| `public` | `parcels_cliplayer` | Collier County parcels with geometry, `elev_mean`, and `ZCTA5CE20` zip codes (read by SIMO) |
-| `public` | `real_property_values` | Collier County assessed property values (`totaljustvalue`) |
-| `clean_data` | `collier_claims_cleaned` | Pre-processed claims (optional reference) |
-| `clean_data` | `claims_processed` | Output written by `DIO.clean_claims` |
-| `public` | `parcel_damage` | Simulation results written by SIMO (auto-created) |
-
-> **Key columns in `parcels_cliplayer`:**
-> - `elev_mean` — mean ground elevation in meters (converted to feet during simulation)
-> - `ZCTA5CE20` — Census ZCTA zip code used for zip-distance feature encoding
->
-> **Training data fallback:** If `/data/*.csv` files are not mounted, MEL automatically loads training data from `clean_data.claims_processed` and derives `zip_mean_dist` from the claims data itself.
-
----
-
-## Data Flow
-
-```
-public.collier_claims
-        │
-        ▼
-DIO.clean_claims ──────────► clean_data.claims_processed
-                                         │
-                                 MEL.configure_run   ◄── DB fallback when CSV not mounted
-                                 MEL.fit_gmm
-                                 MEL.apply_transform
-                                 MEL.train_ensemble
-                                 MEL.export_artifacts ──► /artifacts/{run_id}/
-                                                                   │
-                                                          SIMO.load_artifact
-                                                          SIMO.run_simulation ──► public.parcel_damage
-                                                          SIMO.index_simulation_report ──► ChromaDB
-                                                          SIMO.invalidate_tile_cache
-                                                                   │
-                                                          ST_AsMVT tile endpoint
-                                                          PyDeck MVTLayer (Streamlit UI)
-```
-
----
-
-## Agent UIs
-
-| Agent | URL | Description |
-|-------|-----|-------------|
-| **Streamlit** | http://localhost:8501 | **Primary UI** — full split-screen pipeline interface |
-| Prepper | http://localhost:7004 | Setup wizard |
-| DIO | http://localhost:7001/map | Leaflet spatial clipping tool |
-| SIMO | http://localhost:7003 | Standalone scenario map + RAG chatbox |
-
----
-
-## Performance
-
-| Operation | Latency |
-|-----------|---------|
-| SIMO simulation (500k parcels) | ~3 s |
-| Map tile render (PyDeck MVT) | Instantaneous |
-| RAG chat response | ~1–3 s (LM Studio / Ollama) |
-
-Achieved via: vectorized NumPy inference, PostGIS `ST_AsMVT` tile generation, geometry excluded from the ML pipeline (WKB handled entirely in DB), and `COALESCE`-guarded real elevation/zip queries.
-
----
-
-## Azure VM / Ollama Setup
-
-The pipeline uses Ollama on a budget Azure VM (`Standard_D2s_v3`, Canada Central) as the LLM backend.
-
-### Provision the VM
-
-```bash
-bash scripts/azure-vm-create.sh
-```
-
-### Install Ollama on the VM
-
-```bash
-# Copy and run on the VM
-bash scripts/vm-lmstudio-init.sh
-```
-
-This installs Ollama, configures it as a systemd service on `0.0.0.0:11434`, and pulls `phi3:mini`.
-
-### VM management
-
-```bash
-bash scripts/vm-manage.sh status   # check Ollama health
-bash scripts/vm-manage.sh stop     # deallocate VM (stop billing)
-bash scripts/vm-manage.sh start    # restart VM
-```
-
-> **Model note:** `phi3:mini` does not support the OpenAI function/tool-calling API. For LLM-driven orchestration, pull a tool-capable model:
-> ```bash
-> ollama pull mistral:7b-instruct
-> ```
-> Then set `LM_STUDIO_MODEL=mistral:7b-instruct` in `.env`.
-
----
-
-## Audit Log
-
-Every tool call is logged to `agent_audit_log`:
-
-```sql
-SELECT agent, tool, params, status, ts
-FROM agent_audit_log
-ORDER BY ts DESC
-LIMIT 20;
-```
+1.  Enter your database credentials in the **Phase 0 (Prepper)** screen.
+2.  Click **Verify Connection**.
+3.  Once verified, click **Launch SLR Simulator**.
 
 ---
 
@@ -250,57 +88,28 @@ LIMIT 20;
 
 ```
 slr-pipeline/
-├── docker-compose.yml
-├── .env.example
-├── orchestrator.py           # CLI: LLM → DIO → MEL → SIMO (direct fallback)
-├── requirements.txt          # orchestrator deps
-├── shared/
-│   ├── db.py                 # asyncpg pool + @audit decorator
-│   └── schemas.py            # HandoffToken, ArtifactToken (Pydantic)
-├── agents/
-│   ├── prepper/              # Agent 0: setup wizard UI
-│   ├── dio/                  # Agent 1: MCP server + Leaflet clip UI + spatial tools
-│   ├── mel/                  # Agent 2: MCP server + GMM + ensemble training
-│   └── simo/                 # Agent 3: MCP server + simulator + RAG + MVT tiles
-│       └── src/
-│           ├── server.py     # FastAPI: tool endpoints + ST_AsMVT tile server
-│           ├── simulator.py  # Flood scoring engine (real elev_mean + ZCTA5CE20)
-│           └── rag.py        # ChromaDB + LM Studio RAG pipeline
-├── ui/
-│   ├── app.py                # Streamlit split-screen (Left: chat, Right: canvas)
-│   ├── api_client.py         # Async HTTP client for all agent endpoints
-│   ├── requirements.txt      # Streamlit UI deps
-│   └── views/
-│       ├── prepper.py        # Phase 0 — DB connection wizard
-│       ├── dio.py            # Phase 1 — clip map + existing dataset selector
-│       ├── mel.py            # Phase 2 — EDA-first training + live metrics
-│       └── simo.py           # Phase 3 — dual-layer PyDeck map + RAG chat tab
-├── scripts/
-│   ├── init_db.sql           # DB schema initialization
-│   ├── azure-vm-create.sh    # Provision Azure VM
-│   ├── vm-lmstudio-init.sh   # Install Ollama on VM
-│   └── vm-manage.sh          # Start / stop / status VM
-└── daily_log/                # Session progress notes
-    ├── 2026-03-12.md
-    ├── 2026-03-13.md
-    └── 2026-03-15.md
+├── hub/                      # Primary Control Plane (Next.js + Tailwind)
+│   ├── src/app/              # App Router (Prepper, Simulator)
+│   ├── src/components/       # Hub components (Leaflet, React Flow, Recharts)
+│   └── src/store/            # Zustand global state (Credentials, Layers)
+├── agents/                   # Python MCP Microservices
+│   ├── prepper/              # Agent 0: setup wizard (Legacy/Config)
+│   ├── dio/                  # Agent 1: Data Operator + PostGIS tools
+│   ├── mel/                  # Agent 2: Model Evaluator + Ensemble learning
+│   └── simo/                 # Agent 3: Impact Modeler + Simulation engine
+├── shared/                   # Shared DB and schema utilities
+├── scripts/                  # DB initialization and Azure VM scripts
+└── daily_log/                # Detailed session logs
 ```
 
 ---
 
-## Azure Container Registry Deployment
+## Blog & Updates
 
-```bash
-ACR=<your-registry>.azurecr.io
+For a high-level introduction to the project goals and architecture, check out our [Project Introduction Blog](file:///Users/jorgecorcino/.gemini/antigravity/brain/1b75c615-38db-4840-a289-ede299d7d6c9/blog_intro.md).
 
-for agent in dio mel simo; do
-  az acr build \
-    --registry $ACR \
-    --image slr-pipeline/$agent:latest \
-    --file agents/$agent/Dockerfile \
-    .
-done
-```
+---
 
-> MEL requires `/artifacts` to be a persistent Azure File Share mount.
-> SIMO requires the same share read-only, plus a dedicated ChromaDB volume at `/chroma`.
+## Audit & Compliance
+
+Every orchestration action and tool call is logged to the `agent_audit_log` table for full observability and compliance.

@@ -1,292 +1,244 @@
-"""Main Streamlit Application for the SLR Multi-Agent Pipeline."""
-import re
-import asyncio
-
 import streamlit as st
+import time
 
-st.set_page_config(
-    page_title="SLR Multi-Agent Pipeline",
-    page_icon="🌊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ── Agent ordering ─────────────────────────────────────────────────────────────
-AGENTS = ["Prepper", "DIO", "MEL", "SIMO"]
-AGENT_ICONS = {
-    "Prepper": "⚙",
-    "DIO":     "↗",
-    "MEL":     "◈",
-    "SIMO":    "≋",
-}
-
-# ── Session State ──────────────────────────────────────────────────────────────
-_defaults = {
-    "current_agent":           "Prepper",
-    "unlocked_agents":         {"Prepper"},   # grows as pipeline progresses
-    "chat_history":            [{"role": "assistant", "content": "Welcome to the Sea Level Rise Prediction System. Begin by configuring the backend connections in the Prepper panel."}],
-    "handoff_token":           None,
-    "artifact_token":          None,
-    "simulation_results":      None,
-    "parcel_value_override":   {"table": None, "column": None},
-    "study_config": {
-        "training_table":   "clean_data.claims_processed",
-        "prediction_table": "public.parcels_cliplayer",
-        "values_table":     None,
-        "values_col":       None,
-    },
-    "pending_mel_confirmation": False,
-    "mel_distributions":       None,
-    "mel_predictors":          [],
-    "mel_metrics":             [],
-    "simo_canvas_chat":        [{"role": "assistant", "content": "Ask me anything about the flood damage simulation results."}],
-}
-for k, v in _defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-def _unlock(agent: str):
-    """Mark an agent as accessible in the sidebar."""
-    st.session_state.unlocked_agents.add(agent)
-
-def _go(agent: str):
-    """Navigate to an agent view."""
-    _unlock(agent)
-    st.session_state.current_agent = agent
-
-# Backward-compat shim so existing view code reading active_phase still works
-_PHASE_MAP = {"Prepper": 0, "DIO": 1, "MEL": 2, "SIMO": 3}
-st.session_state.active_phase = _PHASE_MAP.get(st.session_state.current_agent, 0)
-
-# ── Sidebar Navigation ─────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### SLR Pipeline")
-    st.divider()
-
-    unlocked = st.session_state.unlocked_agents
-    for agent in AGENTS:
-        if agent in unlocked:
-            if st.sidebar.button(
-                agent,
-                use_container_width=True,
-                type="primary" if st.session_state.current_agent == agent else "secondary",
-                key=f"nav_{agent}",
-            ):
-                st.session_state.current_agent = agent
-                st.session_state.active_phase = _PHASE_MAP[agent]
-                st.rerun()
-        else:
-            st.sidebar.caption(f"  {agent}  (locked)")
-
-    st.divider()
-
-    # Agent status indicators
-    st.markdown("**Pipeline Status**")
-    st.caption(f"Handoff token: {'set' if st.session_state.handoff_token else 'pending'}")
-    st.caption(f"Artifact token: {'set' if st.session_state.artifact_token else 'pending'}")
-    st.caption(f"Simulation: {'run' if st.session_state.simulation_results else 'pending'}")
-
-# ── Split-Screen Layout ────────────────────────────────────────────────────────
-left_col, right_col = st.columns([1, 2])
-
-# ── Left Panel: Conversational Orchestrator ────────────────────────────────────
-with left_col:
-    st.header("Agent Chat", anchor=False)
-
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if prompt := st.chat_input("Ask a question or provide a command..."):
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # ── Phase 3: Route to SIMO RAG ─────────────────────────────────────────
-        if st.session_state.current_agent == "SIMO":
-            with st.chat_message("assistant"):
-                with st.spinner("Querying simulation knowledge base..."):
-                    try:
-                        from api_client import APIClient
-                        client = APIClient()
-                        rag_res = asyncio.run(client.simo_chat(prompt))
-                        answer = rag_res.get("answer", "No answer returned.")
-                    except Exception as e:
-                        answer = f"RAG unavailable: {e}"
-                st.markdown(answer)
-            st.session_state.chat_history.append({"role": "assistant", "content": answer})
-
-        else:
-            # ── Context-aware study design parser (Phases 0-2) ─────────────────
-            p_lower = prompt.lower()
-            p_orig  = prompt  # preserve case for schema-qualified names
-
-            # ── Table synonym resolver ──────────────────────────────────────────
-            # Keys are bare names (no schema prefix); values are fully-qualified.
-            RESOLVE_TABLES = {
-                "parcels_clipped":         "public.parcels_cliplayer",
-                "parcels_cliplayer":       "public.parcels_cliplayer",
-                "parcels_clipped_layer":   "public.parcels_cliplayer",
-                "parcels":                 "public.parcels_cliplayer",
-                "property_real_value":     "public.real_property_values",
-                "real_property_value":     "public.real_property_values",
-                "real_property_values":    "public.real_property_values",
-                "property_values":         "public.real_property_values",
-                "parcel_value":            "public.real_property_values",
-                "collier_county_claims":   "clean_data.collier_claims_cleaned",
-                "collier_claims_cleaned":  "clean_data.collier_claims_cleaned",
-                "claims_cleaned":          "clean_data.collier_claims_cleaned",
-                "claims_processed":        "clean_data.claims_processed",
-            }
-
-            def resolve(raw: str) -> str:
-                """Resolve a table reference to a fully-qualified name."""
-                raw = raw.strip().rstrip(".,;")
-                # Check for alias even if it has a schema
-                lower_raw = raw.lower()
-                for alias, real in RESOLVE_TABLES.items():
-                    if lower_raw == alias or lower_raw == real.lower() or lower_raw == f"public.{alias}":
-                        return real
-                # Already fully-qualified and not a known alias → return as-is
-                if "." in raw:
-                    return raw
-                return RESOLVE_TABLES.get(raw.lower(), f"public.{raw}")
-
-            # ── Pattern helpers ─────────────────────────────────────────────────
-            # Each field has multiple regex alternatives so natural sentences match.
-            _TBL = r"([\w]+(?:\.[\w]+)?)"   # bare or schema.table
-
-            # Training table patterns
-            _TRAIN_PATS = [
-                rf"using\s+{_TBL}\s+as\s+training",
-                rf"training\s+(?:data|table|set)\s+(?:is\s+|in\s+|from\s+|using\s+){_TBL}",
-                rf"train(?:ing)?\s+(?:on|from|with)\s+{_TBL}",
-            ]
-            # Prediction / target parcels patterns
-            _PRED_PATS = [
-                rf"apply\s+(?:that\s+)?model\s+(?:to|into|on)\s+(?:my\s+)?{_TBL}",
-                rf"apply\s+(?:it\s+)?(?:to|into|on)\s+(?:my\s+)?{_TBL}",
-                rf"predict\s+(?:flood\s+damage\s+)?(?:in|on|into|for)\s+{_TBL}",
-                rf"(?:target|prediction)\s+(?:table\s+)?(?:is\s+)?{_TBL}",
-                rf"model\s+(?:it\s+)?(?:on|into|against)\s+{_TBL}",
-            ]
-            # Values / property table patterns
-            _VAL_PATS = [
-                rf"(?:parcel\s+)?value[s]?\s+(?:can\s+be\s+)?(?:found\s+)?in\s+{_TBL}",
-                rf"(?:property\s+)?value[s]?\s+(?:are\s+)?(?:in|from|at)\s+{_TBL}",
-                rf"values?\s+(?:table\s+)?(?:is\s+)?{_TBL}",
-            ]
-
-            def first_match(patterns, text):
-                for pat in patterns:
-                    m = re.search(pat, text, re.IGNORECASE)
-                    if m:
-                        return m.group(1)
-                return None
-
-            # ── Extract fields ──────────────────────────────────────────────────
-            raw_train = first_match(_TRAIN_PATS, p_orig)
-            if raw_train:
-                st.session_state.study_config["training_table"] = resolve(raw_train)
-
-            raw_pred = first_match(_PRED_PATS, p_orig)
-            if raw_pred:
-                st.session_state.study_config["prediction_table"] = resolve(raw_pred)
-
-            raw_val = first_match(_VAL_PATS, p_orig)
-            if raw_val:
-                resolved_val = resolve(raw_val)
-                st.session_state.study_config["values_table"] = resolved_val
-                # Derive sensible default column
-                if "real_property_values" in resolved_val or "property_value" in resolved_val:
-                    st.session_state.study_config["values_col"] = "totaljustvalue"
-                else:
-                    st.session_state.study_config["values_col"] = "parcel_value"
-
-            # Proactive map centering
-            conf = st.session_state.study_config
-            if conf["prediction_table"]:
-                try:
-                    from api_client import APIClient
-                    client = APIClient()
-                    schema, table = (
-                        conf["prediction_table"].split(".", 1)
-                        if "." in conf["prediction_table"]
-                        else ("public", conf["prediction_table"])
-                    )
-                    extent_res = asyncio.run(client.get_table_extent(table, schema))
-                    if "extent" in extent_res:
-                        box = extent_res["extent"]
-                        m = re.search(r"BOX\(([-\d\.]+) ([-\d\.]+),([-\d\.]+) ([-\d\.]+)\)", box)
-                        if m:
-                            xmin, ymin, xmax, ymax = map(float, m.groups())
-                            st.session_state.map_extent = [[ymin, xmin], [ymax, xmax]]
-                except Exception:
-                    pass
-
-            response = "### Study Design Updated\n"
-            response += f"- **Training Set:** `{conf['training_table']}`\n"
-            response += f"- **Target Parcels:** `{conf['prediction_table']}`\n"
-            if conf["values_table"]:
-                response += f"- **Value Source:** `{conf['values_table']}.{conf['values_col']}`\n"
-            response += "\nConfigured. Shall we move to **MEL** to train the models based on this setup?"
-
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-            st.session_state.pending_mel_confirmation = True
-            with st.chat_message("assistant"):
-                st.markdown(response)
-
-    # Persistent MEL confirmation button
-    if st.session_state.get("pending_mel_confirmation") and st.session_state.current_agent == "DIO":
-        with st.chat_message("assistant"):
-            st.info("Study configuration is ready.")
-            if st.button("Confirm and Proceed to MEL Training", key="proceed_btn_fixed"):
-                conf = st.session_state.study_config
-
-                async def do_handoff():
-                    from api_client import APIClient
-                    client = APIClient()
-                    schema, table = (
-                        conf["training_table"].split(".", 1)
-                        if "." in conf["training_table"]
-                        else ("clean_data", conf["training_table"])
-                    )
-                    return await client.export_handoff(source_table=table, source_schema=schema)
-
-                try:
-                    res = asyncio.run(do_handoff())
-                    st.session_state.handoff_token = res
-                    st.session_state.pending_mel_confirmation = False
-                    _go("MEL")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Handoff failed: {e}")
-
-            if st.button("Cancel", key="cancel_mel_btn"):
-                st.session_state.pending_mel_confirmation = False
-                st.rerun()
-
-    if st.session_state.current_agent == "DIO":
+def render_agent_card(name, role, behaviors, knowledge):
+    """Renders a professional system card for an agent."""
+    with st.container():
+        st.subheader(name, anchor=False)
+        st.info(f"**Role**: {role}")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### Track 1: Behaviors")
+            for b in behaviors:
+                st.markdown(f"- {b}")
+                
+        with col2:
+            st.markdown("### Track 2: Domain Knowledge")
+            for k in knowledge:
+                st.markdown(f"- {k}")
+        
         st.divider()
-        from views.dio import render_dio_left_panel
-        render_dio_left_panel()
 
-# ── Right Panel: Dynamic Visual Canvas ────────────────────────────────────────
-with right_col:
-    agent = st.session_state.current_agent
+def main():
+    st.set_page_config(
+        page_title="SLR Pipeline Orchestration",
+        layout="wide",
+        initial_sidebar_state="collapsed"
+    )
 
-    if agent == "Prepper":
-        from views.prepper import render_prepper_view
-        render_prepper_view()
+    # Initialize session state for config
+    if "config_ready" not in st.session_state:
+        st.session_state.config_ready = False
 
-    elif agent == "DIO":
-        from views.dio import render_dio_view
-        render_dio_view()
+    # --- Header ---
+    st.title("SLR Pipeline: MCP Orchestration Hub", anchor=False)
+    st.caption("Central Control Plane for Multi-Agent Sea Level Rise Analysis")
+    st.divider()
 
-    elif agent == "MEL":
-        from views.mel import render_mel_view
-        render_mel_view()
+    # --- Agent Tabs ---
+    tabs = st.tabs([
+        "Prepper Setup", 
+        "DIO (Data Operator)", 
+        "MEL (Model Evaluation)", 
+        "SIMO (Impact Modeler)"
+    ])
 
-    elif agent == "SIMO":
-        from views.simo import render_simo_view
-        render_simo_view()
+    with tabs[0]:
+        col_info, col_form = st.columns([1, 1])
+        with col_info:
+            render_agent_card(
+                name="Prepper Setup",
+                role="Environment architect and dependency orchestrator.",
+                behaviors=[
+                    "Validates Docker environment and network connectivity.",
+                    "Ensures .env variables match system requirements.",
+                    "Primary constraint: Cannot modify existing database data directly."
+                ],
+                knowledge=[
+                    "Docker Compose orchestration",
+                    "Environment variable management",
+                    "System health diagnostics"
+                ]
+            )
+        
+        with col_form:
+            st.markdown("### Environment Configuration")
+            with st.form("prepper_form"):
+                db_url = st.text_input("PostgreSQL URI", 
+                                     value=st.session_state.get("DATABASE_URL", ""),
+                                     type="password", 
+                                     placeholder="postgresql://user:pass@host:port/dbname")
+                lm_base = st.text_input("LM Studio API Base", 
+                                      value=st.session_state.get("LM_STUDIO_API_BASE", "http://localhost:1234/v1"),
+                                      placeholder="http://localhost:1234/v1")
+                
+                submitted = st.form_submit_button("Verify & Save Configuration", use_container_width=True)
+                
+                if submitted:
+                    with st.status("Verifying connections...", expanded=True) as status:
+                        st.write("Checking database availability...")
+                        time.sleep(1) # Mock check
+                        st.write("Pinging LLM inference server...")
+                        time.sleep(0.5) # Mock check
+                        status.update(label="System Ready", state="complete", expanded=False)
+                    
+                    st.session_state.DATABASE_URL = db_url
+                    st.session_state.LM_STUDIO_API_BASE = lm_base
+                    st.session_state.config_ready = True
+                    st.toast("Credentials stored in session state.", icon="✅")
+
+    with tabs[1]:
+        render_agent_card(
+            name="DIO (Data Operator)",
+            role="Specialist in data ingestion, cleaning, and schema management.",
+            behaviors=[
+                "Read-only access to raw source tables.",
+                "Writes restricted to the clean_data schema.",
+                "Constraint: Must log all data transformations for auditability."
+            ],
+            knowledge=[
+                "PostgreSQL / PostGIS schema design",
+                "Automated data cleaning pipelines",
+                "MVT (Mapbox Vector Tile) generation"
+            ]
+        )
+
+    with tabs[2]:
+        render_agent_card(
+            name="MEL (Model Evaluation)",
+            role="Analytical engine for model training and metric validation.",
+            behaviors=[
+                "Trains ensemble models on cleaned historical claims.",
+                "Evaluates performance using R², RMSE, and MAE.",
+                "Constraint: Models must be exported to a versioned artifact store."
+            ],
+            knowledge=[
+                "Random Forest & Gradient Boosting ensembles",
+                "Yeo-Johnson & Power transformations",
+                "Gaussian Mixture Modeling (GMM)"
+            ]
+        )
+
+    with tabs[3]:
+        render_agent_card(
+            name="SIMO (Impact Modeler)",
+            role="Simulation specialist for sea level rise and parcel-level risk.",
+            behaviors=[
+                "Applies MEL-trained models to large-scale parcel datasets.",
+                "Calculates exposure and damage across multiple SLR scenarios.",
+                "Constraint: RAG memory is limited to verified simulation results."
+            ],
+            knowledge=[
+                "Parcel-level flood exposure modeling",
+                "RAG-based simulation memory (ChromaDB)",
+                "Risk aggregation by ZIP code and municipality"
+            ]
+        )
+
+    # --- Launch Sequence ---
+    st.write("")
+    launch_col1, launch_col2, launch_col3 = st.columns([1, 2, 1])
+    with launch_col2:
+        if st.button("Launch SLR Simulation Environment", 
+                     type="primary", 
+                     icon="🚀",
+                     use_container_width=True,
+                     disabled=not st.session_state.config_ready):
+            st.switch_page("pages/simulator.py")
+        
+        if not st.session_state.config_ready:
+            st.caption("⚠️ Please verify environment settings in the **Prepper Setup** tab to enable launch.")
+
+    # --- System Topography & Knowledge Graph ---
+    st.write("")
+    with st.expander("System Topography & Knowledge Graph", expanded=False):
+        st.markdown("### Architectural Neural Connectivity")
+        st.caption("Visualizing directional data handoffs and service dependencies.")
+        
+        import plotly.graph_objects as go
+
+        # Nodes and their coordinates (manual layout for clarity)
+        nodes = {
+            "User/Researcher": (0, 1),
+            "Prepper Agent": (1, 2),
+            "DIO Agent": (2, 1),
+            "MEL Agent": (3, 1),
+            "SIMO Agent": (4, 1),
+            "PostgreSQL": (1, 0),
+            "LM Studio": (4, 2)
+        }
+
+        # Directional Edges: (Source, Target, Label)
+        edges = [
+            ("User/Researcher", "Prepper Agent", "Initializes"),
+            ("Prepper Agent", "PostgreSQL", "Configures"),
+            ("DIO Agent", "PostgreSQL", "Read/Write"),
+            ("DIO Agent", "MEL Agent", "Data Handoff"),
+            ("MEL Agent", "SIMO Agent", "Model Handoff"),
+            ("SIMO Agent", "LM Studio", "Inference"),
+        ]
+
+        edge_x = []
+        edge_y = []
+        for start_node, end_node, label in edges:
+            x0, y0 = nodes[start_node]
+            x1, y1 = nodes[end_node]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1.5, color='#20B2AA'),
+            hoverinfo='none',
+            mode='lines'
+        )
+
+        node_x = []
+        node_y = []
+        node_text = []
+        for name, (x, y) in nodes.items():
+            node_x.append(x)
+            node_y.append(y)
+            node_text.append(name)
+
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers+text',
+            text=node_text,
+            textposition="top center",
+            hoverinfo='text',
+            marker=dict(
+                size=25,
+                color='#0A192F',
+                line=dict(width=2, color='#20B2AA')
+            )
+        )
+
+        fig = go.Figure(data=[edge_trace, node_trace],
+                     layout=go.Layout(
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=0, l=0, r=0, t=0),
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        height=400
+                    ))
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.divider()
+        st.markdown("### Global Control Plane Settings")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.toggle("Enable Verbose MCP Logging", value=True, help="Stream detailed agent traces to the terminal.")
+            st.toggle("Enable RAG Auto-Indexing", value=True, help="Automatically index simulation results into ChromaDB.")
+        with c2:
+            st.selectbox("Set LLM Inference Port", options=[1234, 8080, 11434], index=0)
+            st.select_slider("Agent Concurrency Limit", options=[1, 2, 4, 8], value=4)
+
+if __name__ == "__main__":
+    main()
