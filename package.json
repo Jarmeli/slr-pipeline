@@ -1,0 +1,11 @@
+{
+  "name": "slr-pipeline-root",
+  "version": "1.0.0",
+  "description": "Root workspace for SLR Pipeline",
+  "scripts": {
+    "dev": "npm run dev --prefix hub",
+    "install-hub": "npm install --prefix hub",
+    "build-hub": "npm run build --prefix hub",
+    "start-hub": "npm run start --prefix hub"
+  }
+}

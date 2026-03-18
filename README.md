@@ -67,13 +67,16 @@ docker compose up --build
 
 ### 3. Launch the Next.js Orchestration Hub
 
-The Hub is the primary control plane for the pipeline:
+The Hub is the primary control plane for the pipeline. You can now launch it directly from the root:
 
 ```bash
-cd hub
-npm install
 npm run dev
 # Open http://localhost:3000
+```
+
+Alternatively, you can run it from the sub-directory:
+```bash
+cd hub && npm run dev
 ```
 
 ### 4. Verification
