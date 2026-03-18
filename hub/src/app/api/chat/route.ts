@@ -103,16 +103,29 @@ export async function POST(request: Request) {
       { role: "user", content: message },
     ];
 
-    // ── Priority fallback: LM Studio → Ollama ──────────────────────────────
-    const OLLAMA_BASE   = "http://localhost:11434/v1";
-    const OLLAMA_MODELS = ["mistral:7b-instruct", "phi3:mini", "mistral", "llama3"];
-    const primaryUrl    = lmStudioIp ?? "http://localhost:1234/v1";
+    // ── Priority fallback: configured URL → VM Ollama → local Ollama ──────────
+    // Server-side env var takes precedence; client-sent lmStudioIp is a secondary override
+    const ENV_URL   = process.env.NEXT_PUBLIC_LM_STUDIO_URL ?? "";
+    const ENV_MODEL = process.env.NEXT_PUBLIC_LM_STUDIO_MODEL ?? "mistral:7b-instruct";
+    const primaryUrl = lmStudioIp ?? ENV_URL ?? "http://localhost:1234/v1";
 
-    // Build ordered candidate list
-    const candidates: { url: string; model: string }[] = [
-      { url: primaryUrl, model: "local-model" },
-      ...OLLAMA_MODELS.map(m => ({ url: OLLAMA_BASE, model: m })),
-    ];
+    // Build ordered candidate list — VM env URL first, then user-configured, then local Ollama
+    const OLLAMA_LOCAL  = "http://localhost:11434/v1";
+    const OLLAMA_MODELS = ["mistral:7b-instruct", "phi3:mini", "mistral", "llama3"];
+
+    const candidates: { url: string; model: string }[] = [];
+
+    // 1. VM endpoint from .env.local (highest priority)
+    if (ENV_URL) candidates.push({ url: ENV_URL, model: ENV_MODEL });
+
+    // 2. User-configured URL from Prepper (if different from env)
+    if (primaryUrl && primaryUrl !== ENV_URL) {
+      candidates.push({ url: primaryUrl, model: ENV_MODEL });
+      candidates.push({ url: primaryUrl, model: "local-model" });
+    }
+
+    // 3. Local Ollama fallback
+    OLLAMA_MODELS.forEach(m => candidates.push({ url: OLLAMA_LOCAL, model: m }));
 
     for (const { url, model } of candidates) {
       try {

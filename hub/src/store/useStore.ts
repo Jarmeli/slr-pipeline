@@ -67,7 +67,7 @@ export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
       dbCredentials: null,
-      lmStudioIp: 'http://localhost:1234/v1',
+      lmStudioIp: process.env.NEXT_PUBLIC_LM_STUDIO_URL ?? 'http://localhost:1234/v1',
       verified: false,
       activeAgent: null,
       chatHistory: [INITIAL_MESSAGE],

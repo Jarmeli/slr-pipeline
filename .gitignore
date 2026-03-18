@@ -51,4 +51,5 @@ daily_log/
 presentations/
 
 # Future-proofing
-node_modules/
+node_modules/.env.local
+hub/.env.local
