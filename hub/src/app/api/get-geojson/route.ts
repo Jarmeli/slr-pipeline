@@ -39,38 +39,38 @@ export async function POST(request: Request) {
 
       const geomCol = colRes.rows[0].column_name;
 
-      // Build optional spatial clip
+      // Build optional spatial clip — WHERE must come before LIMIT
       const boundsClause = bounds
-        ? `WHERE ST_Intersects(${geomCol}, ST_MakeEnvelope($2, $3, $4, $5, 4326))`
+        ? `WHERE ST_Intersects(${geomCol}::geometry, ST_MakeEnvelope($1, $2, $3, $4, 4326))`
         : "";
 
-      const queryParams: any[] = [table.split('.').pop()];
-      if (bounds) {
-        queryParams.push(bounds.west, bounds.south, bounds.east, bounds.north);
-      }
+      // Bounds params only — the main query uses the table name directly (no $1 for table)
+      const queryParams: any[] = bounds
+        ? [bounds.west, bounds.south, bounds.east, bounds.north]
+        : [];
 
       // Extract as GeoJSON, limiting to 1000 for performance
       const query = `
         SELECT jsonb_build_object(
           'type', 'FeatureCollection',
-          'features', jsonb_agg(features.feature)
+          'features', COALESCE(jsonb_agg(features.feature), '[]'::jsonb)
         )
         FROM (
           SELECT jsonb_build_object(
             'type', 'Feature',
             'id', __id,
-            'geometry', ST_AsGeoJSON(ST_Transform(${geomCol}, 4326))::jsonb,
+            'geometry', ST_AsGeoJSON(ST_Transform(${geomCol}::geometry, 4326))::jsonb,
             'properties', to_jsonb(inputs) - '${geomCol}' - '__id'
           ) AS feature
           FROM (
-            SELECT *, row_number() OVER () as __id 
+            SELECT *, row_number() OVER () as __id
             FROM ${table}
             ${boundsClause}
             LIMIT 1000
           ) inputs
         ) features;
       `;
-      
+
       const result = await client.query(query, queryParams);
       await client.end();
       
