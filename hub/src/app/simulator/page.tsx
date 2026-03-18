@@ -113,7 +113,7 @@ export default function SimulatorPage() {
             exit={{ opacity: 0 }}
             className="w-full h-full relative"
           >
-            <MapComponent />
+            <MapComponent enableDraw={true} />
             <DIOControls />
           </motion.div>
         )}

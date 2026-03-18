@@ -3,7 +3,7 @@ import { Client } from "pg";
 
 export async function POST(request: Request) {
   try {
-    const { host, port, user, password, database, table } = await request.json();
+    const { host, port, user, password, database, table, bounds } = await request.json();
 
     if (!table) {
       return NextResponse.json({ success: false, error: "Table name is required" }, { status: 400 });
@@ -39,8 +39,17 @@ export async function POST(request: Request) {
 
       const geomCol = colRes.rows[0].column_name;
 
+      // Build optional spatial clip
+      const boundsClause = bounds
+        ? `WHERE ST_Intersects(${geomCol}, ST_MakeEnvelope($2, $3, $4, $5, 4326))`
+        : "";
+
+      const queryParams: any[] = [table.split('.').pop()];
+      if (bounds) {
+        queryParams.push(bounds.west, bounds.south, bounds.east, bounds.north);
+      }
+
       // Extract as GeoJSON, limiting to 1000 for performance
-      // We use ST_Transform to 4326 (WGS84) which Leaflet expects
       const query = `
         SELECT jsonb_build_object(
           'type', 'FeatureCollection',
@@ -55,13 +64,14 @@ export async function POST(request: Request) {
           ) AS feature
           FROM (
             SELECT *, row_number() OVER () as __id 
-            FROM ${table} 
+            FROM ${table}
+            ${boundsClause}
             LIMIT 1000
           ) inputs
         ) features;
       `;
       
-      const result = await client.query(query);
+      const result = await client.query(query, queryParams);
       await client.end();
       
       return NextResponse.json({ 
